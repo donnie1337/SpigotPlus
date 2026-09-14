@@ -71,6 +71,7 @@ public final class MinecraftConnectionHandler extends ChannelInboundHandlerAdapt
             case HANDSHAKE -> handleHandshake(ctx, packetId, packet);
             case STATUS -> handleStatus(ctx, packetId, packet);
             case LOGIN -> handleLogin(ctx, packetId, packet);
+            case LOGIN_ACKNOWLEDGEMENT -> handleLoginAcknowledgement(ctx, packetId, packet);
             case CONFIGURATION -> handleConfiguration(ctx, packetId, packet);
             case PLAY -> handlePlay(ctx, packetId, packet);
         }
@@ -149,11 +150,20 @@ public final class MinecraftConnectionHandler extends ChannelInboundHandlerAdapt
         writeVarInt(body, 0); // profile properties
         writeUuid(body, session.sessionId()); // Java 26.2 session UUID
         writeFramed(ctx, body);
-        body.release();
+    }
+
+    private void handleLoginAcknowledgement(ChannelHandlerContext ctx, int packetId, ByteBuf packet) {
+        if (packetId != 3 || packet.isReadable()) {
+            ctx.close();
+            return;
+        }
+        state = ConnectionState.CONFIGURATION;
+        writeEmptyPacket(ctx, 3); // Temporary terminal packet; registry/bootstrap comes next.
+        LOGGER.info("Configuration phase started for " + playerSession.username());
     }
 
     private void handleConfiguration(ChannelHandlerContext ctx, int packetId, ByteBuf packet) {
-        if (packetId == 3 && state == ConnectionState.CONFIGURATION) {
+        if (packetId == 3 && !packet.isReadable()) {
             state = ConnectionState.PLAY;
             disconnect(ctx, "SpigotPlus: play bootstrap is the next server phase.");
             return;
@@ -165,16 +175,6 @@ public final class MinecraftConnectionHandler extends ChannelInboundHandlerAdapt
         // Gameplay packets are deliberately not decoded until the Play protocol registry
         // and world/player bootstrap are attached. Never silently accept unknown packets.
         ctx.close();
-    }
-
-    private void handleLoginAcknowledgement(ChannelHandlerContext ctx, int packetId, ByteBuf packet) {
-        if (packetId != 3 || packet.isReadable()) {
-            ctx.close();
-            return;
-        }
-        state = ConnectionState.CONFIGURATION;
-        writeEmptyPacket(ctx, 3); // Clientbound Finish Configuration; registry/bootstrap follows next.
-        LOGGER.info("Configuration phase started for " + playerSession.username());
     }
 
     private void disconnect(ChannelHandlerContext ctx, String reason) {
