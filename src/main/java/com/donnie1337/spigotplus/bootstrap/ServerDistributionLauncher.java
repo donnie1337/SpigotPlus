@@ -11,18 +11,20 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Properties;
 import java.util.jar.JarFile;
 
+/**
+ * Performs the local SpigotPlus runtime preflight before the embedded Spigot
+ * server is started from the same JAR.
+ */
 public final class ServerDistributionLauncher {
     private static final String CONFIG_FILE = "spigotplus.properties";
     private static final String SPIGOT_VERSION = "26.2";
     private static final String JAVA_VERSION = "26";
     private static final String DEFAULT_GEYSER = "2.11.2";
     private static final String DEFAULT_VIA = "5.11.0";
-    private static final String FINAL_FIELD_MUTATION_ARG = "--enable-final-field-mutation=ALL-UNNAMED";
     private final Path root;
     private final Properties config = new Properties();
 
@@ -30,49 +32,30 @@ public final class ServerDistributionLauncher {
         this.root = root.toAbsolutePath().normalize();
     }
 
-    public int run(String[] args) throws Exception {
+    /**
+     * Runs the checks that must happen before the embedded CraftBukkit main.
+     * No external spigot.jar is required and BuildTools is never executed here.
+     *
+     * @return false when startup was intentionally handled by a preflight
+     * command such as status; true when the embedded server should continue.
+     */
+    public boolean prepare(String[] args) throws Exception {
         Files.createDirectories(root);
         loadConfig();
 
         if (has(args, "status") || has(args, "--status")) {
             status();
-            return 0;
+            return false;
         }
 
         validateJava();
-        Path spigot = root.resolve("spigot.jar");
-        if (!validJar(spigot)) {
-            System.err.println("[SpigotPlus] spigot.jar não foi encontrado ou é inválido.");
-            System.err.println("[SpigotPlus] Coloque o Spigot " + getSpigotVersion() + " já compilado como 'spigot.jar'.");
-            System.err.println("[SpigotPlus] O SpigotPlus não executa o BuildTools durante a inicialização.");
-            return 1;
-        }
-
-        if (isEnabled("updates.auto-update", true)) {
-            ensureRuntimePlugins();
-        } else {
-            System.out.println("[SpigotPlus] Atualizações automáticas desativadas.");
-        }
-
+        ensureRuntimePlugins();
         ensureServerProperties();
         ensureEula();
 
-        List<String> command = new ArrayList<>(List.of(javaExecutable()));
-        if (isEnabled("java.enable-final-field-mutation", true)) {
-            command.add(FINAL_FIELD_MUTATION_ARG);
-        }
-        command.add("-Xms" + get("memory.min", "2048M"));
-        command.add("-Xmx" + get("memory.max", "4096M"));
-        command.add("-jar");
-        command.add(spigot.toString());
-        if (isEnabled("startup.nogui", true)) command.add("nogui");
-
-        Process process = new ProcessBuilder(command)
-                .directory(root.toFile())
-                .inheritIO()
-                .start();
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> stop(process), "SpigotPlus Shutdown"));
-        return process.waitFor();
+        System.out.println("[SpigotPlus] Preflight concluído.");
+        System.out.println("[SpigotPlus] Spigot " + getSpigotVersion() + " será iniciado a partir do JAR integrado.");
+        return true;
     }
 
     private void loadConfig() throws IOException {
@@ -101,6 +84,11 @@ public final class ServerDistributionLauncher {
     }
 
     private void ensureRuntimePlugins() throws IOException, InterruptedException {
+        if (!isEnabled("updates.auto-update", true)) {
+            System.out.println("[SpigotPlus] Atualizações automáticas desativadas.");
+            return;
+        }
+
         Path plugins = root.resolve("plugins");
         Path backup = root.resolve(get("backup.directory", "plugins/.backup"));
         Files.createDirectories(plugins);
@@ -131,7 +119,7 @@ public final class ServerDistributionLauncher {
             Path target = plugins.resolve(p.fileName());
             String local = version(target);
             if (validJar(target) && p.matches(local)) {
-                System.out.println("[SpigotPlus] " + p.fileName() + " " + local + " ✓");
+                System.out.println("[SpigotPlus] " + p.fileName() + " " + local + " OK");
                 continue;
             }
 
@@ -172,7 +160,7 @@ public final class ServerDistributionLauncher {
                     }
 
                     replace(tmp, target);
-                    System.out.println("[SpigotPlus] " + p.fileName() + " " + downloaded + " ✓");
+                    System.out.println("[SpigotPlus] " + p.fileName() + " " + downloaded + " OK");
                     error = null;
                     break;
                 } catch (Exception e) {
@@ -221,17 +209,15 @@ public final class ServerDistributionLauncher {
 
     private void status() {
         System.out.println("[SpigotPlus] Status");
-        System.out.println("Spigot " + getSpigotVersion() + ": " + (validJar(root.resolve("spigot.jar")) ? "✓" : "✗"));
+        System.out.println("Spigot " + getSpigotVersion() + ": integrado no SpigotPlus.jar");
         System.out.println("Java " + Runtime.version().feature() + ": " +
-                (String.valueOf(Runtime.version().feature()).equals(getJavaVersion()) ? "✓" : "✗"));
+                (String.valueOf(Runtime.version().feature()).equals(getJavaVersion()) ? "OK" : "ERRO"));
         System.out.println("Auto-update: " + (isEnabled("updates.auto-update", true) ? "ON" : "OFF"));
         System.out.println("Backup: " + (isEnabled("backup.enabled", true) ? "ON" : "OFF"));
         System.out.println("Diagnostics: " + (isEnabled("diagnostics.enabled", true) ? "ON" : "OFF"));
-        System.out.println("Final field mutation: " + (isEnabled("java.enable-final-field-mutation", true) ? "ON" : "OFF"));
-        System.out.println("Memória: " + get("memory.min", "2048M") + " → " + get("memory.max", "4096M"));
         for (String name : List.of("Geyser-Spigot.jar", "ViaVersion.jar", "ViaBackwards.jar", "EssentialsPlus.jar", "CargoPlus.jar", "UtilidadesPlus.jar", "ChatPlus.jar", "LoginPlus.jar", "ClanPlus.jar")) {
             Path file = root.resolve("plugins").resolve(name);
-            System.out.println(name + ": " + (validJar(file) ? "✓" : "✗"));
+            System.out.println(name + ": " + (validJar(file) ? "OK" : "NÃO ENCONTRADO"));
         }
     }
 
@@ -307,23 +293,6 @@ public final class ServerDistributionLauncher {
         if (args == null) return false;
         for (String a : args) if (value.equalsIgnoreCase(a)) return true;
         return false;
-    }
-
-    private static String javaExecutable() {
-        return Path.of(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java").toString();
-    }
-
-    private static boolean isWindows() { return System.getProperty("os.name", "").toLowerCase().contains("win"); }
-
-    private static void stop(Process p) {
-        if (!p.isAlive()) return;
-        p.destroy();
-        try {
-            if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            p.destroyForcibly();
-        }
     }
 
     private record RuntimePlugin(String fileName, String version, String url) {
