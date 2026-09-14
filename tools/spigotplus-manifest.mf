@@ -1,0 +1,2 @@
+Manifest-Version: 1.0
+Main-Class: com.donnie1337.spigotplus.bootstrap.SpigotPlusBootstrap
