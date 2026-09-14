@@ -5,6 +5,7 @@ import com.donnie1337.spigotplus.compatibility.bukkit.BukkitCompatibilityBridge;
 import com.donnie1337.spigotplus.core.config.ServerConfig;
 import com.donnie1337.spigotplus.core.entity.EntityTracker;
 import com.donnie1337.spigotplus.core.network.NetworkBackpressure;
+import com.donnie1337.spigotplus.core.network.NetworkServer;
 import com.donnie1337.spigotplus.core.network.PacketSecurity;
 import com.donnie1337.spigotplus.core.performance.AdaptiveLoadController;
 import com.donnie1337.spigotplus.core.performance.AllocationMetrics;
@@ -22,7 +23,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
-/** Owns the Core lifecycle. Version-specific code stays behind adapters. */
+/** Owns the Core lifecycle and the actual Minecraft server runtime. */
 public final class ServerRuntime {
     private static final Logger LOGGER = Logger.getLogger("SpigotPlus");
     private final String[] arguments;
@@ -41,6 +42,7 @@ public final class ServerRuntime {
     private final ProtocolRegistry protocols = new ProtocolRegistry();
     private final BukkitCompatibility bukkit = new BukkitCompatibilityBridge();
     private final NetworkBackpressure<Object> networkBackpressure = new NetworkBackpressure<>(1024);
+    private final NetworkServer networkServer = new NetworkServer("0.0.0.0", 25565);
 
     public ServerRuntime(String[] arguments) {
         this.arguments = arguments == null ? new String[0] : arguments.clone();
@@ -55,19 +57,24 @@ public final class ServerRuntime {
             throw new IllegalStateException("Server can only be started from NEW state");
         }
         try {
-            LOGGER.info("Starting SpigotPlus Core");
+            LOGGER.info("Starting SpigotPlus Server Core");
             if (arguments.length > 0) LOGGER.info("Bootstrap arguments: " + Arrays.toString(arguments));
             LOGGER.info("Chunk budget: " + config.maxActiveChunksPerPlayer() + " active/player, view "
                     + config.viewDistance() + ", simulation " + config.simulationDistance());
-            LOGGER.info("Core subsystems: chunks, network, entities, async IO, adaptive load, security, profiler, Bukkit compatibility and protocol registry");
+
+            networkServer.start();
             tickEngine.start();
             state.set(ServerState.RUNNING);
-            LOGGER.info("SpigotPlus Core is running at 20 TPS");
+
+            LOGGER.info("SpigotPlus server is listening on 0.0.0.0:25565");
+            LOGGER.info("Server status ping and Minecraft handshake pipeline are active");
         } catch (Throwable throwable) {
             state.set(ServerState.FAILED);
-            LOGGER.log(Level.SEVERE, "Failed to start SpigotPlus Core", throwable);
+            LOGGER.log(Level.SEVERE, "Failed to start SpigotPlus Server", throwable);
+            try { networkServer.close(); } catch (Throwable ignored) { }
+            try { ioExecutor.close(); } catch (Throwable ignored) { }
             termination.countDown();
-            throw new IllegalStateException("Unable to start SpigotPlus Core", throwable);
+            throw new IllegalStateException("Unable to start SpigotPlus Server", throwable);
         }
     }
 
@@ -95,20 +102,22 @@ public final class ServerRuntime {
     public ProtocolRegistry protocols() { return protocols; }
     public BukkitCompatibility bukkit() { return bukkit; }
     public NetworkBackpressure<Object> networkBackpressure() { return networkBackpressure; }
+    public NetworkServer networkServer() { return networkServer; }
 
     public void stop() {
         ServerState current = state.get();
         if (current == ServerState.STOPPED || current == ServerState.STOPPING) return;
         if (!state.compareAndSet(current, ServerState.STOPPING)) return;
         try {
-            LOGGER.info("Stopping SpigotPlus Core");
+            LOGGER.info("Stopping SpigotPlus Server");
             tickEngine.stop();
+            networkServer.close();
             ioExecutor.close();
             state.set(ServerState.STOPPED);
-            LOGGER.info("SpigotPlus Core stopped cleanly");
+            LOGGER.info("SpigotPlus Server stopped cleanly");
         } catch (Throwable throwable) {
             state.set(ServerState.FAILED);
-            LOGGER.log(Level.SEVERE, "Error while stopping SpigotPlus Core", throwable);
+            LOGGER.log(Level.SEVERE, "Error while stopping SpigotPlus Server", throwable);
         } finally {
             termination.countDown();
         }
