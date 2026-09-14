@@ -6,15 +6,20 @@ import io.netty.channel.ChannelHandlerContext;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 
 import java.nio.charset.StandardCharsets;
+import java.util.UUID;
 import java.util.logging.Logger;
 
-/** Minimal protocol front-end: framing, handshake and server-list status. */
+/** Minecraft protocol front-end: framing, handshake, status and Java 26.2 login/configuration phases. */
 public final class MinecraftConnectionHandler extends ChannelInboundHandlerAdapter {
     private static final Logger LOGGER = Logger.getLogger("SpigotPlus");
     private static final int MAX_PACKET_SIZE = 2 * 1024 * 1024;
+    private static final int PROTOCOL_26_2 = 776;
+    private static final UUID SERVER_SESSION_ID = UUID.randomUUID();
 
     private ByteBuf pending;
     private ConnectionState state = ConnectionState.HANDSHAKE;
+    private int protocolVersion = -1;
+    private PlayerSession playerSession;
 
     @Override
     public void channelActive(ChannelHandlerContext ctx) {
@@ -66,7 +71,8 @@ public final class MinecraftConnectionHandler extends ChannelInboundHandlerAdapt
             case HANDSHAKE -> handleHandshake(ctx, packetId, packet);
             case STATUS -> handleStatus(ctx, packetId, packet);
             case LOGIN -> handleLogin(ctx, packetId, packet);
-            case PLAY -> ctx.close();
+            case CONFIGURATION -> handleConfiguration(ctx, packetId, packet);
+            case PLAY -> handlePlay(ctx, packetId, packet);
         }
     }
 
@@ -75,13 +81,19 @@ public final class MinecraftConnectionHandler extends ChannelInboundHandlerAdapt
             ctx.close();
             return;
         }
+
         int protocol = readVarInt(packet, false);
+        if (protocol < 0) {
+            ctx.close();
+            return;
+        }
+        protocolVersion = protocol;
         readString(packet, 255);
         if (packet.readableBytes() < 2) {
             ctx.close();
             return;
         }
-        packet.skipBytes(2); // server port
+        packet.skipBytes(2);
         int nextState = readVarInt(packet, false);
         if (nextState == 1) {
             state = ConnectionState.STATUS;
@@ -96,7 +108,7 @@ public final class MinecraftConnectionHandler extends ChannelInboundHandlerAdapt
 
     private void handleStatus(ChannelHandlerContext ctx, int packetId, ByteBuf packet) {
         if (packetId == 0) {
-            String json = "{\"version\":{\"name\":\"SpigotPlus\",\"protocol\":0},\"players\":{\"max\":100,\"online\":0},\"description\":{\"text\":\"SpigotPlus Server\"}}";
+            String json = "{\"version\":{\"name\":\"SpigotPlus 26.2\",\"protocol\":776},\"players\":{\"max\":100,\"online\":0},\"description\":{\"text\":\"SpigotPlus Server\"}}";
             writePacket(ctx, 0, json.getBytes(StandardCharsets.UTF_8));
         } else if (packetId == 1 && packet.readableBytes() >= 8) {
             long payload = packet.readLong();
@@ -112,32 +124,83 @@ public final class MinecraftConnectionHandler extends ChannelInboundHandlerAdapt
     }
 
     private void handleLogin(ChannelHandlerContext ctx, int packetId, ByteBuf packet) {
-        if (packetId != 0) {
-            ctx.close();
-            return;
-        }
-        String username = readString(packet, 16);
-        if (username == null || username.isBlank()) {
-            ctx.close();
+        if (packetId != 0 || protocolVersion != PROTOCOL_26_2) {
+            disconnect(ctx, "SpigotPlus: only Minecraft Java 26.2 is enabled for the initial login implementation.");
             return;
         }
 
-        // Authentication/play state is deliberately not faked. The connection is
-        // rejected until the version-specific login/configuration pipeline is attached.
-        String reason = "{\"text\":\"SpigotPlus: login pipeline is not available yet\"}";
-        writePacket(ctx, 0, reason.getBytes(StandardCharsets.UTF_8));
-        LOGGER.info("Rejected login for " + username + ": play pipeline is not initialized");
+        String username = readString(packet, 16);
+        if (username == null || username.isBlank() || username.length() > 16) {
+            disconnect(ctx, "SpigotPlus: invalid player name.");
+            return;
+        }
+
+        playerSession = new PlayerSession(username, protocolVersion, SERVER_SESSION_ID);
+        sendLoginSuccess(ctx, playerSession);
+        state = ConnectionState.LOGIN_ACKNOWLEDGEMENT;
+        LOGGER.info("Login accepted for " + username + " using protocol " + protocolVersion);
+    }
+
+    private void sendLoginSuccess(ChannelHandlerContext ctx, PlayerSession session) {
+        ByteBuf body = Unpooled.buffer(96);
+        writeVarInt(body, 2);
+        writeUuid(body, session.uniqueId());
+        writeString(body, session.username());
+        writeVarInt(body, 0); // profile properties
+        writeUuid(body, session.sessionId()); // Java 26.2 session UUID
+        writeFramed(ctx, body);
+        body.release();
+    }
+
+    private void handleConfiguration(ChannelHandlerContext ctx, int packetId, ByteBuf packet) {
+        if (packetId == 3 && state == ConnectionState.CONFIGURATION) {
+            state = ConnectionState.PLAY;
+            disconnect(ctx, "SpigotPlus: play bootstrap is the next server phase.");
+            return;
+        }
         ctx.close();
+    }
+
+    private void handlePlay(ChannelHandlerContext ctx, int packetId, ByteBuf packet) {
+        // Gameplay packets are deliberately not decoded until the Play protocol registry
+        // and world/player bootstrap are attached. Never silently accept unknown packets.
+        ctx.close();
+    }
+
+    private void handleLoginAcknowledgement(ChannelHandlerContext ctx, int packetId, ByteBuf packet) {
+        if (packetId != 3 || packet.isReadable()) {
+            ctx.close();
+            return;
+        }
+        state = ConnectionState.CONFIGURATION;
+        writeEmptyPacket(ctx, 3); // Clientbound Finish Configuration; registry/bootstrap follows next.
+        LOGGER.info("Configuration phase started for " + playerSession.username());
+    }
+
+    private void disconnect(ChannelHandlerContext ctx, String reason) {
+        ByteBuf body = Unpooled.buffer(128);
+        writeVarInt(body, 0);
+        writeString(body, "{\"text\":\"" + escapeJson(reason) + "\"}");
+        writeFramed(ctx, body);
+        body.release();
+        ctx.close();
+    }
+
+    private static String escapeJson(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    private static void writeEmptyPacket(ChannelHandlerContext ctx, int packetId) {
+        ByteBuf body = Unpooled.buffer(5);
+        writeVarInt(body, packetId);
+        writeFramed(ctx, body);
+        body.release();
     }
 
     private static void writePacket(ChannelHandlerContext ctx, int packetId, byte[] payload) {
         ByteBuf body = Unpooled.buffer(payload.length + 8);
         writeVarInt(body, packetId);
-        if (packetId == 0 && payload.length > 0) {
-            writeString(body, new String(payload, StandardCharsets.UTF_8));
-        } else {
-            body.writeBytes(payload);
-        }
+        writeString(body, new String(payload, StandardCharsets.UTF_8));
         writeFramed(ctx, body);
         body.release();
     }
@@ -182,6 +245,11 @@ public final class MinecraftConnectionHandler extends ChannelInboundHandlerAdapt
         buffer.writeBytes(bytes);
     }
 
+    private static void writeUuid(ByteBuf buffer, UUID uuid) {
+        buffer.writeLong(uuid.getMostSignificantBits());
+        buffer.writeLong(uuid.getLeastSignificantBits());
+    }
+
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         if (pending != null) {
@@ -196,5 +264,12 @@ public final class MinecraftConnectionHandler extends ChannelInboundHandlerAdapt
         ctx.close();
     }
 
-    private enum ConnectionState { HANDSHAKE, STATUS, LOGIN, PLAY }
+    private enum ConnectionState {
+        HANDSHAKE,
+        STATUS,
+        LOGIN,
+        LOGIN_ACKNOWLEDGEMENT,
+        CONFIGURATION,
+        PLAY
+    }
 }
