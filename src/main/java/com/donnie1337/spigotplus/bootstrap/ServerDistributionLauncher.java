@@ -1,13 +1,44 @@
 package com.donnie1337.spigotplus.bootstrap;
 
 import java.io.IOException;
+import java.io.InputStream;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.jar.JarFile;
 
 /** Launches the prebuilt Spigot runtime distributed with SpigotPlus. */
 public final class ServerDistributionLauncher {
+    private static final String GEYSER_VERSION = "2.11.2";
+    private static final String GEYSER_BUILD = "1234";
+    private static final String VIAVERSION_VERSION = "5.11.0";
+    private static final String VIABACKWARDS_VERSION = "5.11.0";
+
+    private static final List<RuntimePlugin> RUNTIME_PLUGINS = List.of(
+            new RuntimePlugin(
+                    "Geyser-Spigot.jar",
+                    GEYSER_VERSION,
+                    "https://download.geysermc.org/v2/projects/geyser/versions/" + GEYSER_VERSION
+                            + "/builds/" + GEYSER_BUILD + "/downloads/spigot"),
+            new RuntimePlugin(
+                    "ViaVersion.jar",
+                    VIAVERSION_VERSION,
+                    "https://github.com/ViaVersion/ViaVersion/releases/download/" + VIAVERSION_VERSION
+                            + "/ViaVersion-" + VIAVERSION_VERSION + ".jar"),
+            new RuntimePlugin(
+                    "ViaBackwards.jar",
+                    VIABACKWARDS_VERSION,
+                    "https://github.com/ViaVersion/ViaBackwards/releases/download/" + VIABACKWARDS_VERSION
+                            + "/ViaBackwards-" + VIABACKWARDS_VERSION + ".jar")
+    );
+
     private final Path root;
 
     public ServerDistributionLauncher(Path root) {
@@ -17,11 +48,9 @@ public final class ServerDistributionLauncher {
     /**
      * Starts the already-built Spigot server.
      *
-     * SpigotPlus is intentionally not a BuildTools runner at server startup.
-     * The distribution must contain a valid spigot.jar produced during the
-     * release/build process. This keeps production startup fast and prevents
-     * BuildTools, CraftBukkit and temporary build artifacts from being created
-     * in the server environment.
+     * SpigotPlus does not run BuildTools at startup. Runtime compatibility
+     * plugins are downloaded only when they are missing or when their local
+     * implementation version does not match the version pinned above.
      */
     public int run(String[] args) throws Exception {
         Files.createDirectories(root);
@@ -34,6 +63,7 @@ public final class ServerDistributionLauncher {
             return 1;
         }
 
+        ensureRuntimePlugins();
         ensureServerProperties();
 
         Path eula = root.resolve("eula.txt");
@@ -74,6 +104,88 @@ public final class ServerDistributionLauncher {
         return process.waitFor();
     }
 
+    private void ensureRuntimePlugins() throws IOException, InterruptedException {
+        Path pluginsDir = root.resolve("plugins");
+        Files.createDirectories(pluginsDir);
+
+        HttpClient client = HttpClient.newBuilder()
+                .connectTimeout(Duration.ofSeconds(20))
+                .followRedirects(HttpClient.Redirect.NORMAL)
+                .build();
+
+        for (RuntimePlugin plugin : RUNTIME_PLUGINS) {
+            Path target = pluginsDir.resolve(plugin.fileName());
+            String localVersion = readPluginVersion(target);
+
+            if (Files.exists(target) && plugin.matches(localVersion)) {
+                System.out.println("[SpigotPlus] " + plugin.fileName() + " " + localVersion + " já está atualizado.");
+                continue;
+            }
+
+            if (!Files.exists(target)) {
+                System.out.println("[SpigotPlus] " + plugin.fileName() + " não encontrado. Baixando " + plugin.version() + "...");
+            } else {
+                System.out.println("[SpigotPlus] " + plugin.fileName() + " está na versão "
+                        + (localVersion == null ? "desconhecida" : localVersion)
+                        + ". Atualizando para " + plugin.version() + "...");
+            }
+
+            Path temporary = pluginsDir.resolve(target.getFileName() + ".download");
+            Files.deleteIfExists(temporary);
+
+            HttpRequest request = HttpRequest.newBuilder(URI.create(plugin.url()))
+                    .timeout(Duration.ofMinutes(5))
+                    .header("User-Agent", "SpigotPlus/1.0")
+                    .GET()
+                    .build();
+
+            HttpResponse<InputStream> response = client.send(
+                    request, HttpResponse.BodyHandlers.ofInputStream());
+
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                response.body().close();
+                Files.deleteIfExists(temporary);
+                throw new IOException("Não foi possível baixar " + plugin.fileName()
+                        + ": HTTP " + response.statusCode());
+            }
+
+            try (InputStream input = response.body()) {
+                Files.copy(input, temporary, StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            String downloadedVersion = readPluginVersion(temporary);
+            if (!plugin.matches(downloadedVersion)) {
+                Files.deleteIfExists(temporary);
+                throw new IOException("A versão baixada de " + plugin.fileName()
+                        + " não corresponde à versão esperada " + plugin.version()
+                        + " (recebida: " + downloadedVersion + ").");
+            }
+
+            Files.move(temporary, target,
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+
+            System.out.println("[SpigotPlus] " + plugin.fileName() + " " + downloadedVersion + " instalado.");
+        }
+    }
+
+    private static String readPluginVersion(Path jar) {
+        if (!Files.exists(jar) || !Files.isRegularFile(jar)) return null;
+
+        try (JarFile jarFile = new JarFile(jar.toFile())) {
+            var manifest = jarFile.getManifest();
+            if (manifest == null) return null;
+
+            String version = manifest.getMainAttributes().getValue("Implementation-Version");
+            if (version == null || version.isBlank()) {
+                version = manifest.getMainAttributes().getValue("Specification-Version");
+            }
+            return version == null || version.isBlank() ? null : version.trim();
+        } catch (IOException | RuntimeException ignored) {
+            return null;
+        }
+    }
+
     private void ensureServerProperties() throws IOException {
         Path file = root.resolve("server.properties");
         if (Files.exists(file)) return;
@@ -112,6 +224,13 @@ public final class ServerDistributionLauncher {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             process.destroyForcibly();
+        }
+    }
+
+    private record RuntimePlugin(String fileName, String version, String url) {
+        private boolean matches(String localVersion) {
+            if (localVersion == null) return false;
+            return localVersion.equals(version) || localVersion.startsWith(version + "-");
         }
     }
 }
