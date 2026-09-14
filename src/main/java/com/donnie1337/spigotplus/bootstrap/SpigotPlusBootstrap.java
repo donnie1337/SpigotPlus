@@ -12,6 +12,11 @@ public final class SpigotPlusBootstrap {
     }
 
     public static void main(String[] args) throws Exception {
+        // Spigot exposes this development-oriented property to bypass its
+        // intentionally annoying outdated-build startup delay. SpigotPlus
+        // owns the release build, so the check is not useful to the runtime.
+        System.setProperty("IReallyKnowWhatIAmDoingISwear", "true");
+
         Class<?> spigotMain = Class.forName("org.bukkit.craftbukkit.Main");
         Method main = spigotMain.getMethod("main", String[].class);
         try {
