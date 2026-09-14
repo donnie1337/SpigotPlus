@@ -9,228 +9,117 @@ import java.net.http.HttpResponse;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.security.MessageDigest;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Properties;
 import java.util.jar.JarFile;
 
-/** Launches the prebuilt Spigot runtime distributed with SpigotPlus. */
 public final class ServerDistributionLauncher {
-    private static final String GEYSER_VERSION = "2.11.2";
-    private static final String GEYSER_BUILD = "1234";
-    private static final String VIAVERSION_VERSION = "5.11.0";
-    private static final String VIABACKWARDS_VERSION = "5.11.0";
-
-    private static final List<RuntimePlugin> RUNTIME_PLUGINS = List.of(
-            new RuntimePlugin(
-                    "Geyser-Spigot.jar",
-                    GEYSER_VERSION,
-                    "https://download.geysermc.org/v2/projects/geyser/versions/" + GEYSER_VERSION
-                            + "/builds/" + GEYSER_BUILD + "/downloads/spigot"),
-            new RuntimePlugin(
-                    "ViaVersion.jar",
-                    VIAVERSION_VERSION,
-                    "https://github.com/ViaVersion/ViaVersion/releases/download/" + VIAVERSION_VERSION
-                            + "/ViaVersion-" + VIAVERSION_VERSION + ".jar"),
-            new RuntimePlugin(
-                    "ViaBackwards.jar",
-                    VIABACKWARDS_VERSION,
-                    "https://github.com/ViaVersion/ViaBackwards/releases/download/" + VIABACKWARDS_VERSION
-                            + "/ViaBackwards-" + VIABACKWARDS_VERSION + ".jar")
-    );
-
+    private static final String CONFIG_FILE = "spigotplus.properties";
+    private static final String SPIGOT_VERSION = "26.2";
+    private static final String JAVA_VERSION = "26";
+    private static final String DEFAULT_GEYSER = "2.11.2";
+    private static final String DEFAULT_VIA = "5.11.0";
     private final Path root;
+    private final Properties config = new Properties();
 
-    public ServerDistributionLauncher(Path root) {
-        this.root = root.toAbsolutePath().normalize();
-    }
+    public ServerDistributionLauncher(Path root) { this.root = root.toAbsolutePath().normalize(); }
 
-    /**
-     * Starts the already-built Spigot server.
-     *
-     * SpigotPlus does not run BuildTools at startup. Runtime compatibility
-     * plugins are downloaded only when they are missing or when their local
-     * implementation version does not match the version pinned above.
-     */
     public int run(String[] args) throws Exception {
         Files.createDirectories(root);
-
-        Path spigotJar = root.resolve("spigot.jar");
-        if (!Files.exists(spigotJar) || Files.size(spigotJar) <= 1024 * 1024) {
+        loadConfig();
+        if (has(args, "status") || has(args, "--status")) { status(); return 0; }
+        validateJava();
+        Path spigot = root.resolve("spigot.jar");
+        if (!validJar(spigot)) {
             System.err.println("[SpigotPlus] spigot.jar não foi encontrado ou é inválido.");
-            System.err.println("[SpigotPlus] Coloque o Spigot 26.2 já compilado como 'spigot.jar' no diretório do servidor.");
+            System.err.println("[SpigotPlus] Coloque o Spigot " + get("spigot.version", SPIGOT_VERSION) + " já compilado como 'spigot.jar'.");
             System.err.println("[SpigotPlus] O SpigotPlus não executa o BuildTools durante a inicialização.");
             return 1;
         }
-
         ensureRuntimePlugins();
         ensureServerProperties();
-
-        Path eula = root.resolve("eula.txt");
-        if (!Files.exists(eula)) {
-            Files.writeString(eula,
-                    "# By changing the setting below to TRUE you are indicating your agreement to the Minecraft EULA.\n"
-                            + "eula=false\n");
-            System.out.println("[SpigotPlus] eula.txt foi criado. Altere eula=false para eula=true antes de iniciar o servidor.");
-            return 1;
-        }
-
-        String eulaText = Files.readString(eula);
-        if (!eulaText.matches("(?s).*\\beula\\s*=\\s*true\\b.*")) {
-            System.out.println("[SpigotPlus] EULA ainda não foi aceita. Altere eula=false para eula=true em eula.txt.");
-            return 1;
-        }
-
-        List<String> command = new ArrayList<>();
-        command.add(javaExecutable());
-        command.add("-Xms2048M");
-        command.add("-Xmx4096M");
-        command.add("-jar");
-        command.add(spigotJar.toString());
-        if (args == null || args.length == 0) {
-            command.add("nogui");
-        } else {
-            command.addAll(List.of(args));
-        }
-
-        Process process = new ProcessBuilder(command)
-                .directory(root.toFile())
-                .inheritIO()
-                .start();
-
-        Runtime.getRuntime().addShutdownHook(
-                new Thread(() -> stop(process), "SpigotPlus Spigot Shutdown"));
-
+        ensureEula();
+        List<String> command = new ArrayList<>(List.of(javaExecutable(), "-Xms" + get("memory.min", "2048M"), "-Xmx" + get("memory.max", "4096M"), "-jar", spigot.toString(), "nogui"));
+        Process process = new ProcessBuilder(command).directory(root.toFile()).inheritIO().start();
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> stop(process), "SpigotPlus Shutdown"));
         return process.waitFor();
     }
 
+    private void loadConfig() throws IOException {
+        Path file = root.resolve(CONFIG_FILE);
+        if (!Files.exists(file)) Files.writeString(file, "spigot.version=26.2\njava.version=26\nmemory.min=2048M\nmemory.max=4096M\ngeyser.version=2.11.2\nviaversion.version=5.11.0\nviabackwards.version=5.11.0\n");
+        try (InputStream in = Files.newInputStream(file)) { config.load(in); }
+    }
+
+    private void validateJava() {
+        String actual = String.valueOf(Runtime.version().feature());
+        String expected = get("java.version", JAVA_VERSION);
+        if (!expected.equals(actual)) throw new IllegalStateException("Java " + expected + " é necessária; detectada Java " + actual + ".");
+    }
+
     private void ensureRuntimePlugins() throws IOException, InterruptedException {
-        Path pluginsDir = root.resolve("plugins");
-        Files.createDirectories(pluginsDir);
-
-        HttpClient client = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(20))
-                .followRedirects(HttpClient.Redirect.NORMAL)
-                .build();
-
-        for (RuntimePlugin plugin : RUNTIME_PLUGINS) {
-            Path target = pluginsDir.resolve(plugin.fileName());
-            String localVersion = readPluginVersion(target);
-
-            if (Files.exists(target) && plugin.matches(localVersion)) {
-                System.out.println("[SpigotPlus] " + plugin.fileName() + " " + localVersion + " já está atualizado.");
-                continue;
+        Path plugins = root.resolve("plugins"); Path backup = plugins.resolve(".backup");
+        Files.createDirectories(plugins); Files.createDirectories(backup);
+        String geyser = get("geyser.version", DEFAULT_GEYSER), via = get("viaversion.version", DEFAULT_VIA), backwards = get("viabackwards.version", DEFAULT_VIA);
+        List<RuntimePlugin> list = List.of(
+                new RuntimePlugin("Geyser-Spigot.jar", geyser, "https://download.geysermc.org/v2/projects/geyser/versions/" + geyser + "/builds/latest/downloads/spigot"),
+                new RuntimePlugin("ViaVersion.jar", via, "https://github.com/ViaVersion/ViaVersion/releases/download/" + via + "/ViaVersion-" + via + ".jar"),
+                new RuntimePlugin("ViaBackwards.jar", backwards, "https://github.com/ViaVersion/ViaBackwards/releases/download/" + backwards + "/ViaBackwards-" + backwards + ".jar"));
+        HttpClient client = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(20)).followRedirects(HttpClient.Redirect.NORMAL).build();
+        for (RuntimePlugin p : list) {
+            Path target = plugins.resolve(p.fileName()); String local = version(target);
+            if (validJar(target) && p.matches(local)) { System.out.println("[SpigotPlus] " + p.fileName() + " " + local + " ✓"); continue; }
+            Path tmp = plugins.resolve(p.fileName() + ".download"); Files.deleteIfExists(tmp); Exception error = null;
+            for (int attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    HttpRequest req = HttpRequest.newBuilder(URI.create(p.url())).timeout(Duration.ofMinutes(5)).header("User-Agent", "SpigotPlus/1.0").GET().build();
+                    HttpResponse<InputStream> res = client.send(req, HttpResponse.BodyHandlers.ofInputStream());
+                    if (res.statusCode() < 200 || res.statusCode() >= 300) { res.body().close(); throw new IOException("HTTP " + res.statusCode()); }
+                    try (InputStream in = res.body()) { Files.copy(in, tmp, StandardCopyOption.REPLACE_EXISTING); }
+                    String downloaded = version(tmp);
+                    if (!validJar(tmp) || !p.matches(downloaded)) throw new IOException("JAR inválido ou versão inesperada: " + downloaded);
+                    String expectedSha = get("sha256." + p.fileName(), "");
+                    if (!expectedSha.isBlank() && !expectedSha.equalsIgnoreCase(sha256(tmp))) throw new IOException("SHA-256 inválido");
+                    if (validJar(target)) Files.copy(target, backup.resolve(p.fileName() + "." + (local == null ? "unknown" : local) + ".jar"), StandardCopyOption.REPLACE_EXISTING);
+                    replace(tmp, target); System.out.println("[SpigotPlus] " + p.fileName() + " " + downloaded + " ✓"); error = null; break;
+                } catch (Exception e) { error = e; Files.deleteIfExists(tmp); if (attempt < 3) Thread.sleep(1500L * attempt); }
             }
-
-            if (!Files.exists(target)) {
-                System.out.println("[SpigotPlus] " + plugin.fileName() + " não encontrado. Baixando " + plugin.version() + "...");
-            } else {
-                System.out.println("[SpigotPlus] " + plugin.fileName() + " está na versão "
-                        + (localVersion == null ? "desconhecida" : localVersion)
-                        + ". Atualizando para " + plugin.version() + "...");
-            }
-
-            Path temporary = pluginsDir.resolve(target.getFileName() + ".download");
-            Files.deleteIfExists(temporary);
-
-            HttpRequest request = HttpRequest.newBuilder(URI.create(plugin.url()))
-                    .timeout(Duration.ofMinutes(5))
-                    .header("User-Agent", "SpigotPlus/1.0")
-                    .GET()
-                    .build();
-
-            HttpResponse<InputStream> response = client.send(
-                    request, HttpResponse.BodyHandlers.ofInputStream());
-
-            if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                response.body().close();
-                Files.deleteIfExists(temporary);
-                throw new IOException("Não foi possível baixar " + plugin.fileName()
-                        + ": HTTP " + response.statusCode());
-            }
-
-            try (InputStream input = response.body()) {
-                Files.copy(input, temporary, StandardCopyOption.REPLACE_EXISTING);
-            }
-
-            String downloadedVersion = readPluginVersion(temporary);
-            if (!plugin.matches(downloadedVersion)) {
-                Files.deleteIfExists(temporary);
-                throw new IOException("A versão baixada de " + plugin.fileName()
-                        + " não corresponde à versão esperada " + plugin.version()
-                        + " (recebida: " + downloadedVersion + ").");
-            }
-
-            Files.move(temporary, target,
-                    StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE);
-
-            System.out.println("[SpigotPlus] " + plugin.fileName() + " " + downloadedVersion + " instalado.");
+            if (error != null && !(validJar(target) && p.matches(version(target)))) throw new IOException("Falha ao instalar " + p.fileName(), error);
+            if (error != null) System.err.println("[SpigotPlus] Falha na atualização; mantendo " + p.fileName() + " atual.");
         }
     }
 
-    private static String readPluginVersion(Path jar) {
-        if (!Files.exists(jar) || !Files.isRegularFile(jar)) return null;
-
-        try (JarFile jarFile = new JarFile(jar.toFile())) {
-            var manifest = jarFile.getManifest();
-            if (manifest == null) return null;
-
-            String version = manifest.getMainAttributes().getValue("Implementation-Version");
-            if (version == null || version.isBlank()) {
-                version = manifest.getMainAttributes().getValue("Specification-Version");
-            }
-            return version == null || version.isBlank() ? null : version.trim();
-        } catch (IOException | RuntimeException ignored) {
-            return null;
-        }
+    private void ensureEula() throws IOException {
+        Path eula = root.resolve("eula.txt");
+        if (!Files.exists(eula)) { Files.writeString(eula, "eula=false\n"); throw new IllegalStateException("EULA criada. Aceite-a em eula.txt."); }
+        if (!Files.readString(eula).matches("(?s).*\\beula\\s*=\\s*true\\b.*")) throw new IllegalStateException("EULA ainda não foi aceita.");
     }
 
     private void ensureServerProperties() throws IOException {
         Path file = root.resolve("server.properties");
-        if (Files.exists(file)) return;
-
-        Files.writeString(file,
-                "server-port=25565\n"
-                        + "bind-address=\n"
-                        + "server-ip=\n"
-                        + "view-distance=10\n"
-                        + "simulation-distance=6\n"
-                        + "max-players=100\n"
-                        + "online-mode=true\n"
-                        + "enforce-secure-profile=false\n"
-                        + "motd=SpigotPlus Server\n"
-                        + "level-name=world\n"
-                        + "allow-flight=true\n");
+        if (!Files.exists(file)) Files.writeString(file, "server-port=25565\nserver-ip=\nview-distance=10\nsimulation-distance=6\nmax-players=100\nonline-mode=true\nenforce-secure-profile=false\nmotd=SpigotPlus Server\nlevel-name=world\nallow-flight=true\n");
     }
 
-    private static String javaExecutable() {
-        String home = System.getProperty("java.home");
-        return Path.of(home, "bin", isWindows() ? "java.exe" : "java").toString();
-    }
-
-    private static boolean isWindows() {
-        return System.getProperty("os.name", "").toLowerCase().contains("win");
-    }
-
-    private static void stop(Process process) {
-        if (!process.isAlive()) return;
-
-        process.destroy();
-        try {
-            if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-            }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            process.destroyForcibly();
+    private void status() {
+        System.out.println("[SpigotPlus] Status");
+        System.out.println("Spigot " + get("spigot.version", SPIGOT_VERSION) + ": " + (validJar(root.resolve("spigot.jar")) ? "✓" : "✗"));
+        System.out.println("Java " + Runtime.version().feature() + ": " + (String.valueOf(Runtime.version().feature()).equals(get("java.version", JAVA_VERSION)) ? "✓" : "✗"));
+        for (String name : List.of("Geyser-Spigot.jar", "ViaVersion.jar", "ViaBackwards.jar", "EssentialsPlus.jar", "CargoPlus.jar", "UtilidadesPlus.jar", "ChatPlus.jar", "LoginPlus.jar", "ClanPlus.jar")) {
+            Path file = root.resolve("plugins").resolve(name); System.out.println(name + ": " + (validJar(file) ? "✓" : "✗"));
         }
     }
 
-    private record RuntimePlugin(String fileName, String version, String url) {
-        private boolean matches(String localVersion) {
-            if (localVersion == null) return false;
-            return localVersion.equals(version) || localVersion.startsWith(version + "-");
-        }
-    }
+    private static boolean validJar(Path p) { if (!Files.isRegularFile(p)) return false; try (JarFile ignored = new JarFile(p.toFile())) { return true; } catch (IOException | RuntimeException e) { return false; } }
+    private static String version(Path p) { if (!validJar(p)) return null; try (JarFile jar = new JarFile(p.toFile())) { var m = jar.getManifest(); if (m == null) return null; String v = m.getMainAttributes().getValue("Implementation-Version"); if (v == null || v.isBlank()) v = m.getMainAttributes().getValue("Specification-Version"); return v == null || v.isBlank() ? null : v.trim(); } catch (IOException | RuntimeException e) { return null; } }
+    private static String sha256(Path p) throws Exception { MessageDigest d = MessageDigest.getInstance("SHA-256"); try (InputStream in = Files.newInputStream(p)) { byte[] b = new byte[8192]; int n; while ((n = in.read(b)) != -1) d.update(b, 0, n); } StringBuilder s = new StringBuilder(); for (byte b : d.digest()) s.append(String.format("%02x", b)); return s.toString(); }
+    private static void replace(Path src, Path dst) throws IOException { try { Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE); } catch (java.nio.file.AtomicMoveNotSupportedException e) { Files.move(src, dst, StandardCopyOption.REPLACE_EXISTING); } }
+    private String get(String key, String fallback) { return config.getProperty(key, fallback).trim(); }
+    private static boolean has(String[] args, String value) { if (args == null) return false; for (String a : args) if (value.equalsIgnoreCase(a)) return true; return false; }
+    private static String javaExecutable() { return Path.of(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java").toString(); }
+    private static boolean isWindows() { return System.getProperty("os.name", "").toLowerCase().contains("win"); }
+    private static void stop(Process p) { if (!p.isAlive()) return; p.destroy(); try { if (!p.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) p.destroyForcibly(); } catch (InterruptedException e) { Thread.currentThread().interrupt(); p.destroyForcibly(); } }
+    private record RuntimePlugin(String fileName, String version, String url) { boolean matches(String v) { return v != null && (v.equals(version) || v.startsWith(version + "-")); } }
 }
