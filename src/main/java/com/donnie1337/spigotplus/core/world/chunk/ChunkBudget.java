@@ -11,11 +11,11 @@ import com.donnie1337.spigotplus.core.config.ServerConfig;
 public record ChunkBudget(
         int viewDistance,
         int simulationDistance,
-        int maxActivePerPlayer,
-        int maxGeneratingPerPlayer,
-        int maxSendingPerPlayer,
-        int globalMaxGenerating,
-        int globalMaxSending
+        int maxActiveChunksPerPlayer,
+        int maxGeneratingChunksPerPlayer,
+        int maxSendingChunksPerPlayer,
+        int globalMaxGeneratingChunks,
+        int globalMaxSendingChunks
 ) {
     public ChunkBudget {
         if (viewDistance < 2) {
@@ -24,10 +24,10 @@ public record ChunkBudget(
         if (simulationDistance < 1 || simulationDistance > viewDistance) {
             throw new IllegalArgumentException("simulationDistance must be between 1 and viewDistance");
         }
-        if (maxActivePerPlayer < 1 || maxGeneratingPerPlayer < 1 || maxSendingPerPlayer < 1) {
+        if (maxActiveChunksPerPlayer < 1 || maxGeneratingChunksPerPlayer < 1 || maxSendingChunksPerPlayer < 1) {
             throw new IllegalArgumentException("Per-player chunk budgets must be positive");
         }
-        if (globalMaxGenerating < 1 || globalMaxSending < 1) {
+        if (globalMaxGeneratingChunks < 1 || globalMaxSendingChunks < 1) {
             throw new IllegalArgumentException("Global chunk budgets must be positive");
         }
     }
@@ -50,18 +50,20 @@ public record ChunkBudget(
 
     /** Returns the maximum square side represented by the active chunk budget. */
     public int activeChunkDiameter() {
-        return (int) Math.floor(Math.sqrt(maxActivePerPlayer));
+        return (int) Math.floor(Math.sqrt(maxActiveChunksPerPlayer));
     }
 
     public boolean withinActiveBudget(int activeChunks) {
-        return activeChunks <= maxActivePerPlayer;
+        return activeChunks <= maxActiveChunksPerPlayer;
     }
 
     public boolean withinGenerationBudget(int generatingChunks, int globalGeneratingChunks) {
-        return generatingChunks < maxGeneratingPerPlayer && globalGeneratingChunks < globalMaxGenerating;
+        return generatingChunks < maxGeneratingChunksPerPlayer
+                && globalGeneratingChunks < globalMaxGeneratingChunks;
     }
 
     public boolean withinSendBudget(int sendingChunks, int globalSendingChunks) {
-        return sendingChunks < maxSendingPerPlayer && globalSendingChunks < globalMaxSending;
+        return sendingChunks < maxSendingChunksPerPlayer
+                && globalSendingChunks < globalMaxSendingChunks;
     }
 }
