@@ -15,12 +15,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
 
-/**
- * Provisions a real Spigot runtime for SpigotPlus.
- *
- * Spigot is produced by the official Spigot BuildTools distribution process;
- * SpigotPlus does not use Paper as its server engine.
- */
+/** Provisions a real Spigot runtime for SpigotPlus. */
 public final class ServerDistributionLauncher {
     private static final String SPIGOT_VERSION = "26.2";
     private static final String BUILD_TOOLS_URL =
@@ -44,7 +39,14 @@ public final class ServerDistributionLauncher {
     public ServerDistributionLauncher(Path root) {
         this.root = root.toAbsolutePath().normalize();
         this.plugins = this.root.resolve("plugins");
-        this.buildDirectory = this.root.resolve(".spigot-build");
+        // Keep BuildTools completely outside the server directory. This avoids OneDrive,
+        // cloud-sync and path/line-ending interference with Git patch application.
+        String localAppData = System.getenv("LOCALAPPDATA");
+        if (localAppData != null && !localAppData.isBlank()) {
+            this.buildDirectory = Path.of(localAppData, "SpigotPlus", "BuildTools", SPIGOT_VERSION);
+        } else {
+            this.buildDirectory = Path.of(System.getProperty("java.io.tmpdir"), "SpigotPlus", "BuildTools", SPIGOT_VERSION);
+        }
     }
 
     public int run(String[] args) throws Exception {
@@ -59,7 +61,7 @@ public final class ServerDistributionLauncher {
         Path eula = root.resolve("eula.txt");
         if (!Files.exists(eula)) {
             Files.writeString(eula, "# By changing the setting below to TRUE you are indicating your agreement to the Minecraft EULA.\neula=false\n");
-            System.out.println("[SpigotPlus] eula.txt foi criado. Leia a EULA e altere eula=false para eula=true antes de iniciar o servidor.");
+            System.out.println("[SpigotPlus] eula.txt foi criado. Altere eula=false para eula=true antes de iniciar o servidor.");
             return 1;
         }
         String eulaText = Files.readString(eula);
@@ -77,10 +79,7 @@ public final class ServerDistributionLauncher {
         if (args == null || args.length == 0) command.add("nogui");
         else command.addAll(List.of(args));
 
-        Process process = new ProcessBuilder(command)
-                .directory(root.toFile())
-                .inheritIO()
-                .start();
+        Process process = new ProcessBuilder(command).directory(root.toFile()).inheritIO().start();
         Runtime.getRuntime().addShutdownHook(new Thread(() -> stop(process), "SpigotPlus Spigot Shutdown"));
         return process.waitFor();
     }
@@ -97,47 +96,22 @@ public final class ServerDistributionLauncher {
         }
 
         cleanBuildWorkspace();
-
         System.out.println("[SpigotPlus] Construindo Spigot " + SPIGOT_VERSION + " com o BuildTools oficial...");
-        List<String> command = List.of(
-                javaExecutable(),
-                "-jar",
-                buildTools.toString(),
-                "--rev",
-                SPIGOT_VERSION
-        );
-
-        Process process = new ProcessBuilder(command)
-                .directory(buildDirectory.toFile())
-                .inheritIO()
-                .start();
+        Process process = new ProcessBuilder(javaExecutable(), "-jar", buildTools.toString(), "--rev", SPIGOT_VERSION)
+                .directory(buildDirectory.toFile()).inheritIO().start();
         int exitCode = process.waitFor();
-        if (exitCode != 0) {
-            throw new IOException("Spigot BuildTools terminou com código " + exitCode + ". Verifique o log acima.");
-        }
+        if (exitCode != 0) throw new IOException("Spigot BuildTools terminou com código " + exitCode + ". Verifique o log acima.");
 
         Path builtJar = buildDirectory.resolve("spigot-" + SPIGOT_VERSION + ".jar");
         if (!Files.exists(builtJar) || Files.size(builtJar) <= 1024 * 1024) {
             try (Stream<Path> files = Files.list(buildDirectory)) {
-                builtJar = files
-                        .filter(path -> path.getFileName().toString().startsWith("spigot-")
-                                && path.getFileName().toString().endsWith(".jar"))
+                builtJar = files.filter(path -> path.getFileName().toString().startsWith("spigot-") && path.getFileName().toString().endsWith(".jar"))
                         .filter(path -> {
-                            try {
-                                return Files.size(path) > 1024 * 1024;
-                            } catch (IOException ignored) {
-                                return false;
-                            }
-                        })
-                        .findFirst()
-                        .orElse(null);
+                            try { return Files.size(path) > 1024 * 1024; } catch (IOException ignored) { return false; }
+                        }).findFirst().orElse(null);
             }
         }
-
-        if (builtJar == null || !Files.exists(builtJar)) {
-            throw new IOException("O BuildTools terminou sem gerar o spigot-" + SPIGOT_VERSION + ".jar.");
-        }
-
+        if (builtJar == null || !Files.exists(builtJar)) throw new IOException("O BuildTools terminou sem gerar o spigot-" + SPIGOT_VERSION + ".jar.");
         Files.copy(builtJar, target, StandardCopyOption.REPLACE_EXISTING);
         System.out.println("[SpigotPlus] Spigot " + SPIGOT_VERSION + " pronto em " + target.getFileName() + ".");
     }
@@ -145,47 +119,25 @@ public final class ServerDistributionLauncher {
     private void cleanBuildWorkspace() throws IOException {
         if (!Files.exists(buildDirectory)) return;
         try (Stream<Path> entries = Files.list(buildDirectory)) {
-            entries
-                    .filter(path -> !path.equals(buildDirectory.resolve("BuildTools.jar")))
-                    .sorted(Comparator.reverseOrder())
-                    .forEach(path -> {
-                        try {
-                            deleteRecursively(path);
-                        } catch (IOException exception) {
-                            throw new BuildCleanupException(exception);
-                        }
+            entries.filter(path -> !path.equals(buildDirectory.resolve("BuildTools.jar")))
+                    .sorted(Comparator.reverseOrder()).forEach(path -> {
+                        try { deleteRecursively(path); } catch (IOException e) { throw new BuildCleanupException(e); }
                     });
-        } catch (BuildCleanupException exception) {
-            throw exception.getCause();
-        }
+        } catch (BuildCleanupException e) { throw e.getCause(); }
     }
 
     private static void deleteRecursively(Path path) throws IOException {
         if (Files.isDirectory(path)) {
             try (Stream<Path> children = Files.list(path)) {
-                children.forEach(child -> {
-                    try {
-                        deleteRecursively(child);
-                    } catch (IOException exception) {
-                        throw new BuildCleanupException(exception);
-                    }
-                });
-            } catch (BuildCleanupException exception) {
-                throw exception.getCause();
-            }
+                children.forEach(child -> { try { deleteRecursively(child); } catch (IOException e) { throw new BuildCleanupException(e); } });
+            } catch (BuildCleanupException e) { throw e.getCause(); }
         }
         Files.deleteIfExists(path);
     }
 
     private static final class BuildCleanupException extends RuntimeException {
-        private BuildCleanupException(IOException cause) {
-            super(cause);
-        }
-
-        @Override
-        public synchronized IOException getCause() {
-            return (IOException) super.getCause();
-        }
+        private BuildCleanupException(IOException cause) { super(cause); }
+        @Override public synchronized IOException getCause() { return (IOException) super.getCause(); }
     }
 
     private void ensurePlugin(String fileName, String url) throws IOException, InterruptedException {
@@ -197,18 +149,14 @@ public final class ServerDistributionLauncher {
 
     private void download(String url, Path target) throws IOException, InterruptedException {
         Path temp = target.resolveSibling(target.getFileName() + ".download");
-        HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofMinutes(10))
-                .header("User-Agent", "SpigotPlus/1.0 (+https://github.com/donnie1337/SpigotPlus)")
-                .GET().build();
+        HttpRequest request = HttpRequest.newBuilder(URI.create(url)).timeout(Duration.ofMinutes(10))
+                .header("User-Agent", "SpigotPlus/1.0 (+https://github.com/donnie1337/SpigotPlus)").GET().build();
         HttpResponse<InputStream> response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
         if (response.statusCode() < 200 || response.statusCode() >= 300) {
             response.body().close();
             throw new IOException("Download failed (HTTP " + response.statusCode() + "): " + url);
         }
-        try (InputStream input = response.body()) {
-            Files.copy(input, temp, StandardCopyOption.REPLACE_EXISTING);
-        }
+        try (InputStream input = response.body()) { Files.copy(input, temp, StandardCopyOption.REPLACE_EXISTING); }
         Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
     }
 
@@ -220,22 +168,15 @@ public final class ServerDistributionLauncher {
 
     private static String javaExecutable() {
         String home = System.getProperty("java.home");
-        Path bin = Path.of(home, "bin", isWindows() ? "java.exe" : "java");
-        return bin.toString();
+        return Path.of(home, "bin", isWindows() ? "java.exe" : "java").toString();
     }
 
-    private static boolean isWindows() {
-        return System.getProperty("os.name", "").toLowerCase().contains("win");
-    }
+    private static boolean isWindows() { return System.getProperty("os.name", "").toLowerCase().contains("win"); }
 
     private static void stop(Process process) {
         if (!process.isAlive()) return;
         process.destroy();
-        try {
-            if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) process.destroyForcibly();
-        } catch (InterruptedException interrupted) {
-            Thread.currentThread().interrupt();
-            process.destroyForcibly();
-        }
+        try { if (!process.waitFor(10, java.util.concurrent.TimeUnit.SECONDS)) process.destroyForcibly(); }
+        catch (InterruptedException e) { Thread.currentThread().interrupt(); process.destroyForcibly(); }
     }
 }
