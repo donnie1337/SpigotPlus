@@ -1,8 +1,6 @@
 # SpigotPlus
 
-Distribuição e bootstrap de servidor **Spigot**, preparada para executar o servidor Minecraft em **26.2** com compatibilidade de clientes de versões anteriores através da camada de protocolo.
-
-O projeto foi criado para manter o servidor baseado no ecossistema **Bukkit/Spigot**, sem substituir o motor do Spigot por um engine próprio.
+Distribuição e bootstrap de servidor **Spigot 26.2**, mantendo o ecossistema Bukkit/Spigot como base e adicionando compatibilidade Java/Bedrock.
 
 ## Visão geral
 
@@ -11,7 +9,7 @@ O projeto foi criado para manter o servidor baseado no ecossistema **Bukkit/Spig
                              │
                     Bootstrap / Launcher
                              │
-                    Official Spigot 26.2
+                    Spigot 26.2 pré-compilado
                              │
               ┌──────────────┼──────────────┐
               │              │              │
@@ -32,16 +30,14 @@ O projeto foi criado para manter o servidor baseado no ecossistema **Bukkit/Spig
 ### Componentes
 
 - **Spigot 26.2** — motor principal do servidor.
-- **ViaVersion** — permite a entrada de clientes de versões diferentes da versão do servidor.
-- **ViaBackwards** — amplia a compatibilidade com versões anteriores suportadas pelo conjunto Via.
-- **Geyser-Spigot** — permite a conexão de jogadores Bedrock ao servidor Java.
-- **Plugins Bukkit/Spigot** — continuam funcionando através da API padrão do Spigot.
+- **ViaVersion** — compatibilidade com clientes Java de versões diferentes.
+- **ViaBackwards** — compatibilidade com versões Java anteriores suportadas pelo conjunto Via.
+- **Geyser-Spigot** — conexão de jogadores Bedrock ao servidor Java.
+- **Plugins Bukkit/Spigot** — continuam utilizando a API padrão do Spigot.
 
 ## Compatibilidade
 
 ### Servidor
-
-A versão de servidor atualmente utilizada pelo SpigotPlus é:
 
 - **Minecraft 26.2**
 - **Spigot 26.2**
@@ -49,73 +45,79 @@ A versão de servidor atualmente utilizada pelo SpigotPlus é:
 
 ### Clientes Java
 
-O objetivo do projeto é permitir que clientes Java de **1.19.x até 26.2.x** entrem no mesmo servidor, utilizando ViaVersion/ViaBackwards quando necessário.
+O objetivo é permitir clientes Java de **1.19.x até 26.2.x** no mesmo servidor, utilizando ViaVersion/ViaBackwards quando necessário.
 
-A compatibilidade exata de cada versão depende das versões suportadas pelas camadas Via instaladas.
+A compatibilidade exata depende das versões suportadas pelas camadas Via instaladas. O SpigotPlus não substitui nem modifica o motor do Spigot para realizar essa compatibilidade.
 
 ### Clientes Bedrock
 
 O Geyser-Spigot fornece a ponte entre Bedrock e Java.
 
-Configuração padrão utilizada no ambiente atual:
-
 ```text
 Bedrock UDP: 19132
 ```
 
-O jogador Bedrock entra pelo endereço do servidor usando a porta UDP configurada no Geyser.
-
 ## Arquitetura atual
 
-O SpigotPlus **não é um fork independente do Minecraft** e não substitui o funcionamento interno do Spigot.
+O SpigotPlus **não é um fork independente do Minecraft**. O servidor final continua sendo um **Spigot 26.2 oficial compilado**.
 
-O projeto atua como uma camada de distribuição/bootstrap que:
+O fluxo de execução é simples:
 
-1. prepara o ambiente do servidor;
-2. obtém o BuildTools oficial do Spigot;
-3. compila o Spigot 26.2 quando necessário;
-4. localiza o JAR compilado do Spigot;
-5. copia o resultado para `spigot.jar` no diretório do servidor;
-6. prepara os plugins de compatibilidade;
-7. inicia o Spigot normalmente.
+```text
+SpigotPlus.jar
+      │
+      ▼
+verifica spigot.jar
+      │
+      ├── existe e é válido ──► inicia Spigot
+      │
+      └── ausente/inválido ───► informa o erro e encerra
+```
 
-Isso mantém a compatibilidade com o ecossistema Bukkit/Spigot e permite que os plugins do servidor continuem utilizando a API convencional.
+### Importante
+
+O SpigotPlus **não executa o BuildTools durante a inicialização**.
+
+Também não:
+
+- compila o Spigot a cada startup;
+- baixa o BuildTools durante o startup;
+- cria workspace `.spigot-build` para produção;
+- baixa automaticamente os plugins de compatibilidade durante o startup.
+
+Isso deixa a execução do servidor rápida, previsível e independente de downloads ou caches de compilação.
 
 ## Build do Spigot
 
-O SpigotPlus utiliza o **Spigot BuildTools oficial** para gerar o servidor.
+O `spigot.jar` deve ser **pré-compilado antes da execução/distribuição**.
 
-A compilação é feita em um workspace isolado, fora do diretório principal do servidor. No Windows, o workspace preferencial fica em:
+O BuildTools oficial continua sendo utilizado para gerar o Spigot, porém como parte do processo de **build/release**, e não como parte do runtime do servidor.
 
-```text
-%LOCALAPPDATA%\SpigotPlus\BuildTools\26.2\
-```
-
-Caso `LOCALAPPDATA` não esteja disponível, o sistema utiliza um diretório temporário.
-
-Antes de uma nova compilação, o workspace é limpo, mantendo apenas o `BuildTools.jar`. Isso evita que arquivos temporários, caches ou artefatos de uma compilação anterior contaminem uma nova execução.
-
-O isolamento também evita problemas quando o servidor está dentro de diretórios sincronizados, como OneDrive.
-
-## Inicialização
-
-O launcher do SpigotPlus prepara o servidor e, depois, inicia o Spigot.
-
-Exemplo:
-
-```bash
-java -Xms2048M -Xmx4096M -jar SpigotPlus.jar nogui
-```
-
-Depois da preparação, o servidor é executado através de:
+Depois de compilar o Spigot 26.2, coloque o JAR final no diretório do servidor com o nome:
 
 ```text
 spigot.jar
 ```
 
-## Estrutura do servidor
+É recomendado utilizar um workspace limpo e fora de diretórios sincronizados, como OneDrive, durante a compilação.
 
-Uma instalação típica possui:
+## Inicialização
+
+Com o `spigot.jar` já preparado:
+
+```bash
+java -Xms2048M -Xmx4096M -jar SpigotPlus.jar nogui
+```
+
+O launcher valida os arquivos básicos e executa:
+
+```text
+spigot.jar
+```
+
+Se o `spigot.jar` não existir ou for inválido, o SpigotPlus encerra a inicialização e informa que o JAR pré-compilado precisa ser colocado no diretório do servidor.
+
+## Estrutura do servidor
 
 ```text
 Servidor/
@@ -126,18 +128,24 @@ Servidor/
 │   ├── ViaVersion.jar
 │   ├── ViaBackwards.jar
 │   └── ...
+├── server.properties
+├── eula.txt
 ├── world/
 ├── world_nether/
 └── world_the_end/
 ```
 
-O `spigot.jar` é o servidor compilado pelo BuildTools. O `SpigotPlus.jar` é responsável pelo processo de preparação e inicialização da distribuição.
+O `spigot.jar` é o servidor Spigot 26.2 pré-compilado.
+
+O `SpigotPlus.jar` é apenas o launcher responsável por iniciar esse servidor.
+
+Os plugins de compatibilidade devem estar previamente presentes em `plugins/` quando forem utilizados.
 
 ## Compatibilidade com plugins
 
 Como o servidor final continua sendo **Spigot**, plugins Bukkit/Spigot podem ser utilizados normalmente, respeitando as APIs e limitações da versão do servidor.
 
-Plugins atualmente integrados ao ambiente do projeto incluem:
+Plugins integrados ao ambiente do projeto incluem:
 
 - EssentialsPlus
 - CargoPlus
@@ -149,23 +157,40 @@ Plugins atualmente integrados ao ambiente do projeto incluem:
 - ViaBackwards
 - Geyser-Spigot
 
-## Rede e segurança
+## Rede e compatibilidade
 
-A arquitetura de compatibilidade utiliza a seguinte sequência conceitual:
+### Java
 
 ```text
-Cliente Java / Bedrock
-          ↓
-       Geyser / Via
-          ↓
-        Spigot
-          ↓
-    Bukkit / Spigot API
-          ↓
-         Plugins
+Cliente Java 1.19.x → 26.2.x
+              │
+              ▼
+        ViaVersion / ViaBackwards
+              │
+              ▼
+           Spigot 26.2
+              │
+              ▼
+       Bukkit / Spigot API
+              │
+              ▼
+            Plugins
 ```
 
-O objetivo é manter a camada de compatibilidade separada dos plugins do servidor, reduzindo a necessidade de alterações específicas em cada plugin para suportar diferentes clientes.
+### Bedrock
+
+```text
+Cliente Bedrock
+      │
+      ▼
+ Geyser-Spigot
+      │
+      ▼
+  Spigot 26.2
+      │
+      ▼
+    Plugins
+```
 
 ## Build do projeto
 
@@ -174,30 +199,29 @@ Requer:
 - **JDK 26**
 - **Maven**
 
-Para compilar o projeto:
-
 ```bash
 mvn -B clean package
 ```
 
 O artefato do projeto é gerado em `target/`.
 
+A compilação do SpigotPlus e a compilação do `spigot.jar` são processos separados: o Maven gera o launcher e o BuildTools é utilizado separadamente para preparar o Spigot.
+
 ## Estado atual
 
 ### Funcionando
 
 - [x] Bootstrap do SpigotPlus
-- [x] Preparação automática do Spigot 26.2
-- [x] BuildTools isolado fora do diretório do servidor
-- [x] Limpeza do workspace antes da compilação
-- [x] Geração e utilização do `spigot.jar`
-- [x] Inicialização do Spigot 26.2
+- [x] Inicialização do Spigot 26.2 através de `spigot.jar` pré-compilado
+- [x] Inicialização sem BuildTools
+- [x] Inicialização sem compilação automática do Spigot
+- [x] Inicialização sem download automático de plugins
 - [x] Java 26
 - [x] ViaVersion
 - [x] ViaBackwards
 - [x] Geyser-Spigot
-- [x] Execução dos plugins Bukkit/Spigot do servidor
-- [x] Inicialização completa do ambiente com mundos Java
+- [x] Execução dos plugins Bukkit/Spigot
+- [x] Mundos Java do servidor
 
 ### Próximos testes / evolução
 
@@ -205,17 +229,17 @@ O artefato do projeto é gerado em `target/`.
 - [ ] Validar conexão Bedrock em rede externa
 - [ ] Ajustar configurações de ping/legacy do Geyser quando necessário
 - [ ] Documentar configurações recomendadas de rede e firewall
-- [ ] Expandir ferramentas de diagnóstico e manutenção da distribuição
+- [ ] Expandir ferramentas de diagnóstico e manutenção
+- [ ] Automatizar o processo de release para gerar e empacotar o `spigot.jar` previamente
 
 ## Objetivo do projeto
 
-O objetivo do SpigotPlus é fornecer uma instalação de servidor **Spigot moderna, automatizada e compatível**, mantendo o ecossistema Bukkit/Spigot como base e adicionando uma camada prática para:
+O objetivo do SpigotPlus é fornecer uma instalação de servidor **Spigot moderna, simples e compatível**, mantendo o ecossistema Bukkit/Spigot como base e adicionando:
 
 - múltiplas versões de clientes Java;
 - acesso de jogadores Bedrock;
-- preparação automática do servidor;
-- isolamento seguro do BuildTools;
-- inicialização simplificada;
+- inicialização rápida através de um `spigot.jar` pré-compilado;
+- distribuição organizada dos componentes de compatibilidade;
 - manutenção centralizada da distribuição.
 
-> **SpigotPlus = Spigot como núcleo + automação de distribuição + compatibilidade Java/Bedrock.**
+> **SpigotPlus = Spigot como núcleo + launcher de distribuição + compatibilidade Java/Bedrock.**
