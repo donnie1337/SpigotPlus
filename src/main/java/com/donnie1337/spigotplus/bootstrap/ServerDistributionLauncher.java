@@ -12,18 +12,18 @@ import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Stream;
 
 /**
- * Provisions the proven Bukkit-compatible 26.2 runtime used by SpigotPlus.
- * SpigotPlus remains the distribution/bootstrap layer; Paper provides the
- * complete Minecraft/Bukkit/Spigot implementation instead of maintaining a
- * second incomplete protocol implementation in parallel.
+ * Provisions a real Spigot runtime for SpigotPlus.
+ *
+ * Spigot is produced by the official Spigot BuildTools distribution process;
+ * SpigotPlus does not use Paper as its server engine.
  */
 public final class ServerDistributionLauncher {
-    private static final String PAPER_VERSION = "26.2";
-    private static final int PAPER_BUILD = 123;
-    private static final String PAPER_URL =
-            "https://api.papermc.io/v2/projects/paper/versions/26.2/builds/123/downloads/paper-26.2-123.jar";
+    private static final String SPIGOT_VERSION = "26.2";
+    private static final String BUILD_TOOLS_URL =
+            "https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar";
     private static final String GEYSER_URL =
             "https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot";
     private static final String VIA_VERSION_URL =
@@ -34,6 +34,7 @@ public final class ServerDistributionLauncher {
 
     private final Path root;
     private final Path plugins;
+    private final Path buildDirectory;
     private final HttpClient http = HttpClient.newBuilder()
             .connectTimeout(TIMEOUT)
             .followRedirects(HttpClient.Redirect.NORMAL)
@@ -42,13 +43,14 @@ public final class ServerDistributionLauncher {
     public ServerDistributionLauncher(Path root) {
         this.root = root.toAbsolutePath().normalize();
         this.plugins = this.root.resolve("plugins");
+        this.buildDirectory = this.root.resolve(".spigot-build");
     }
 
     public int run(String[] args) throws Exception {
         Files.createDirectories(root);
         Files.createDirectories(plugins);
         ensureServerProperties();
-        ensurePaper();
+        ensureSpigot();
         ensurePlugin("Geyser-Spigot.jar", GEYSER_URL);
         ensurePlugin("ViaVersion.jar", VIA_VERSION_URL);
         ensurePlugin("ViaBackwards.jar", VIA_BACKWARDS_URL);
@@ -70,7 +72,7 @@ public final class ServerDistributionLauncher {
         command.add("-Xms2048M");
         command.add("-Xmx4096M");
         command.add("-jar");
-        command.add(root.resolve("paper.jar").toString());
+        command.add(root.resolve("spigot.jar").toString());
         if (args == null || args.length == 0) command.add("nogui");
         else command.addAll(List.of(args));
 
@@ -78,15 +80,63 @@ public final class ServerDistributionLauncher {
                 .directory(root.toFile())
                 .inheritIO()
                 .start();
-        Runtime.getRuntime().addShutdownHook(new Thread(() -> stop(process), "SpigotPlus Paper Shutdown"));
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> stop(process), "SpigotPlus Spigot Shutdown"));
         return process.waitFor();
     }
 
-    private void ensurePaper() throws IOException, InterruptedException {
-        Path target = root.resolve("paper.jar");
+    private void ensureSpigot() throws IOException, InterruptedException {
+        Path target = root.resolve("spigot.jar");
         if (Files.exists(target) && Files.size(target) > 1024 * 1024) return;
-        System.out.println("[SpigotPlus] Baixando Paper " + PAPER_VERSION + " build #" + PAPER_BUILD + "...");
-        download(PAPER_URL, target);
+
+        Files.createDirectories(buildDirectory);
+        Path buildTools = buildDirectory.resolve("BuildTools.jar");
+        if (!Files.exists(buildTools) || Files.size(buildTools) < 64 * 1024) {
+            System.out.println("[SpigotPlus] Baixando Spigot BuildTools...");
+            download(BUILD_TOOLS_URL, buildTools);
+        }
+
+        System.out.println("[SpigotPlus] Construindo Spigot " + SPIGOT_VERSION + " com o BuildTools oficial...");
+        List<String> command = List.of(
+                javaExecutable(),
+                "-jar",
+                buildTools.toString(),
+                "--rev",
+                SPIGOT_VERSION
+        );
+
+        Process process = new ProcessBuilder(command)
+                .directory(buildDirectory.toFile())
+                .inheritIO()
+                .start();
+        int exitCode = process.waitFor();
+        if (exitCode != 0) {
+            throw new IOException("Spigot BuildTools terminou com código " + exitCode + ". Verifique o log acima.");
+        }
+
+        Path builtJar = buildDirectory.resolve("spigot-" + SPIGOT_VERSION + ".jar");
+        if (!Files.exists(builtJar) || Files.size(builtJar) <= 1024 * 1024) {
+            try (Stream<Path> files = Files.list(buildDirectory)) {
+                builtJar = files
+                        .filter(path -> path.getFileName().toString().startsWith("spigot-")
+                                && path.getFileName().toString().endsWith(".jar"))
+                        .filter(path -> {
+                            try {
+                                return Files.size(path) > 1024 * 1024;
+                            } catch (IOException ignored) {
+                                return false;
+                            }
+                        })
+                        .findFirst()
+                        .orElse(null);
+            }
+        }
+
+        if (builtJar == null || !Files.exists(builtJar)) {
+            throw new IOException("O BuildTools terminou sem gerar o spigot-" + SPIGOT_VERSION + ".jar.");
+        }
+
+        Files.copy(builtJar, target, StandardCopyOption.REPLACE_EXISTING);
+        System.out.println("[SpigotPlus] Spigot " + SPIGOT_VERSION + " pronto em " + target.getFileName() + ".");
     }
 
     private void ensurePlugin(String fileName, String url) throws IOException, InterruptedException {
@@ -99,7 +149,7 @@ public final class ServerDistributionLauncher {
     private void download(String url, Path target) throws IOException, InterruptedException {
         Path temp = target.resolveSibling(target.getFileName() + ".download");
         HttpRequest request = HttpRequest.newBuilder(URI.create(url))
-                .timeout(Duration.ofMinutes(5))
+                .timeout(Duration.ofMinutes(10))
                 .header("User-Agent", "SpigotPlus/1.0 (+https://github.com/donnie1337/SpigotPlus)")
                 .GET().build();
         HttpResponse<InputStream> response = http.send(request, HttpResponse.BodyHandlers.ofInputStream());
