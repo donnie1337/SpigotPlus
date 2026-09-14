@@ -1,6 +1,9 @@
 package com.donnie1337.spigotplus.core;
 
+import com.donnie1337.spigotplus.core.config.ServerConfig;
 import com.donnie1337.spigotplus.core.scheduler.TickEngine;
+import com.donnie1337.spigotplus.core.world.chunk.ChunkBudget;
+import com.donnie1337.spigotplus.core.world.chunk.ChunkLoadController;
 
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
@@ -16,9 +19,13 @@ public final class ServerRuntime {
     private final AtomicReference<ServerState> state = new AtomicReference<>(ServerState.NEW);
     private final CountDownLatch termination = new CountDownLatch(1);
     private final TickEngine tickEngine;
+    private final ServerConfig config;
+    private final ChunkLoadController chunkLoadController;
 
     public ServerRuntime(String[] arguments) {
         this.arguments = arguments == null ? new String[0] : arguments.clone();
+        this.config = ServerConfig.defaults();
+        this.chunkLoadController = new ChunkLoadController(ChunkBudget.from(config));
         this.tickEngine = new TickEngine(this::tick);
     }
 
@@ -32,6 +39,9 @@ public final class ServerRuntime {
             if (arguments.length > 0) {
                 LOGGER.info("Bootstrap arguments: " + Arrays.toString(arguments));
             }
+            LOGGER.info("Chunk budget: " + config.maxActiveChunksPerPlayer()
+                    + " active/player, view " + config.viewDistance()
+                    + ", simulation " + config.simulationDistance());
 
             tickEngine.start();
             state.set(ServerState.RUNNING);
@@ -47,6 +57,14 @@ public final class ServerRuntime {
     private void tick() {
         // World, player, plugin and network systems will be attached here in later phases.
         // The Core intentionally owns the single authoritative tick thread.
+    }
+
+    public ChunkLoadController chunkLoadController() {
+        return chunkLoadController;
+    }
+
+    public ServerConfig config() {
+        return config;
     }
 
     public void stop() {
