@@ -1,17 +1,15 @@
 package com.donnie1337.spigotplus.bootstrap;
 
-import com.donnie1337.spigotplus.core.ServerRuntime;
+import java.nio.file.Path;
 
-/** Entry point responsible only for creating and owning the server lifecycle. */
+/** Entry point for the SpigotPlus distribution runtime. */
 public final class SpigotPlusBootstrap {
     private SpigotPlusBootstrap() {
     }
 
-    public static void main(String[] args) {
-        ServerRuntime server = new ServerRuntime(args);
-        Runtime.getRuntime().addShutdownHook(new Thread(server::stop, "SpigotPlus Shutdown"));
-        server.start();
-
-        server.awaitTermination();
+    public static void main(String[] args) throws Exception {
+        int exitCode = new ServerDistributionLauncher(Path.of("."))
+                .run(args);
+        if (exitCode != 0) System.exit(exitCode);
     }
 }
