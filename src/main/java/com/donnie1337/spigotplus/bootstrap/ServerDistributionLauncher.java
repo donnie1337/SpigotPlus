@@ -11,6 +11,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -95,6 +96,8 @@ public final class ServerDistributionLauncher {
             download(BUILD_TOOLS_URL, buildTools);
         }
 
+        cleanBuildWorkspace();
+
         System.out.println("[SpigotPlus] Construindo Spigot " + SPIGOT_VERSION + " com o BuildTools oficial...");
         List<String> command = List.of(
                 javaExecutable(),
@@ -137,6 +140,52 @@ public final class ServerDistributionLauncher {
 
         Files.copy(builtJar, target, StandardCopyOption.REPLACE_EXISTING);
         System.out.println("[SpigotPlus] Spigot " + SPIGOT_VERSION + " pronto em " + target.getFileName() + ".");
+    }
+
+    private void cleanBuildWorkspace() throws IOException {
+        if (!Files.exists(buildDirectory)) return;
+        try (Stream<Path> entries = Files.list(buildDirectory)) {
+            entries
+                    .filter(path -> !path.equals(buildDirectory.resolve("BuildTools.jar")))
+                    .sorted(Comparator.reverseOrder())
+                    .forEach(path -> {
+                        try {
+                            deleteRecursively(path);
+                        } catch (IOException exception) {
+                            throw new BuildCleanupException(exception);
+                        }
+                    });
+        } catch (BuildCleanupException exception) {
+            throw exception.getCause();
+        }
+    }
+
+    private static void deleteRecursively(Path path) throws IOException {
+        if (Files.isDirectory(path)) {
+            try (Stream<Path> children = Files.list(path)) {
+                children.forEach(child -> {
+                    try {
+                        deleteRecursively(child);
+                    } catch (IOException exception) {
+                        throw new BuildCleanupException(exception);
+                    }
+                });
+            } catch (BuildCleanupException exception) {
+                throw exception.getCause();
+            }
+        }
+        Files.deleteIfExists(path);
+    }
+
+    private static final class BuildCleanupException extends RuntimeException {
+        private BuildCleanupException(IOException cause) {
+            super(cause);
+        }
+
+        @Override
+        public synchronized IOException getCause() {
+            return (IOException) super.getCause();
+        }
     }
 
     private void ensurePlugin(String fileName, String url) throws IOException, InterruptedException {
