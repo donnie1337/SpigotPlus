@@ -22,6 +22,7 @@ public final class ServerDistributionLauncher {
     private static final String JAVA_VERSION = "26";
     private static final String DEFAULT_GEYSER = "2.11.2";
     private static final String DEFAULT_VIA = "5.11.0";
+    private static final String FINAL_FIELD_MUTATION_ARG = "--enable-final-field-mutation=ALL-UNNAMED";
     private final Path root;
     private final Properties config = new Properties();
 
@@ -56,13 +57,14 @@ public final class ServerDistributionLauncher {
         ensureServerProperties();
         ensureEula();
 
-        List<String> command = new ArrayList<>(List.of(
-                javaExecutable(),
-                "-Xms" + get("memory.min", "2048M"),
-                "-Xmx" + get("memory.max", "4096M"),
-                "-jar",
-                spigot.toString()
-        ));
+        List<String> command = new ArrayList<>(List.of(javaExecutable()));
+        if (isEnabled("java.enable-final-field-mutation", true)) {
+            command.add(FINAL_FIELD_MUTATION_ARG);
+        }
+        command.add("-Xms" + get("memory.min", "2048M"));
+        command.add("-Xmx" + get("memory.max", "4096M"));
+        command.add("-jar");
+        command.add(spigot.toString());
         if (isEnabled("startup.nogui", true)) command.add("nogui");
 
         Process process = new ProcessBuilder(command)
@@ -225,6 +227,7 @@ public final class ServerDistributionLauncher {
         System.out.println("Auto-update: " + (isEnabled("updates.auto-update", true) ? "ON" : "OFF"));
         System.out.println("Backup: " + (isEnabled("backup.enabled", true) ? "ON" : "OFF"));
         System.out.println("Diagnostics: " + (isEnabled("diagnostics.enabled", true) ? "ON" : "OFF"));
+        System.out.println("Final field mutation: " + (isEnabled("java.enable-final-field-mutation", true) ? "ON" : "OFF"));
         System.out.println("Memória: " + get("memory.min", "2048M") + " → " + get("memory.max", "4096M"));
         for (String name : List.of("Geyser-Spigot.jar", "ViaVersion.jar", "ViaBackwards.jar", "EssentialsPlus.jar", "CargoPlus.jar", "UtilidadesPlus.jar", "ChatPlus.jar", "LoginPlus.jar", "ClanPlus.jar")) {
             Path file = root.resolve("plugins").resolve(name);
@@ -294,9 +297,10 @@ public final class ServerDistributionLauncher {
     private static String defaultConfig() {
         return "server.spigot-version=26.2\nserver.java-version=26\nmemory.min=2048M\nmemory.max=4096M\n" +
                 "compatibility.geyser-version=2.11.2\ncompatibility.viaversion-version=5.11.0\n" +
-                "compatibility.viabackwards-version=5.11.0\nupdates.auto-update=true\nupdates.retries=3\n" +
-                "updates.retry-delay-ms=1500\nbackup.enabled=true\nbackup.directory=plugins/.backup\n" +
-                "diagnostics.enabled=true\nstartup.nogui=true\n";
+                "compatibility.viabackwards-version=5.11.0\ncompatibility.geyser-port=19132\n" +
+                "updates.auto-update=true\nupdates.retries=3\nupdates.retry-delay-ms=1500\n" +
+                "backup.enabled=true\nbackup.directory=plugins/.backup\ndiagnostics.enabled=true\n" +
+                "java.enable-final-field-mutation=true\nstartup.nogui=true\n";
     }
 
     private static boolean has(String[] args, String value) {
