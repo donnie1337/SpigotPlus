@@ -3,11 +3,20 @@ setlocal EnableExtensions EnableDelayedExpansion
 
 title SpigotPlus - Single JAR Build
 
+rem ============================================================================
+rem SpigotPlus - BUILD 100%% LOCAL
+rem ============================================================================
+rem Nenhum caminho de OneDrive, Dropbox ou outra pasta sincronizada e usado.
+rem O repositorio pode estar em qualquer local, mas os artefatos temporarios do
+rem BuildTools sao sempre mantidos em C:\SpigotPlusBuild.
+rem ============================================================================
+
 set "ROOT=%~dp0.."
 set "TOOLS=%ROOT%\tools"
-set "BUILD=%ROOT%\build\spigot"
-set "DIST=%ROOT%\dist"
-set "BUILDTOOLS=%TOOLS%\BuildTools.jar"
+set "LOCALBUILD=C:\SpigotPlusBuild"
+set "BUILD=%LOCALBUILD%\spigot"
+set "BUILDTOOLS=%LOCALBUILD%\BuildTools.jar"
+set "DIST=%LOCALBUILD%\dist"
 set "BASE=%BUILD%\SpigotBase.jar"
 set "FINAL=%DIST%\SpigotPlus.jar"
 
@@ -15,7 +24,11 @@ cd /d "%ROOT%"
 
 echo ==========================================
 echo        SPIGOTPLUS - SINGLE JAR BUILD
+echo             BUILD 100%% LOCAL
 echo ==========================================
+echo.
+echo Repositorio: %ROOT%
+echo Build local: %LOCALBUILD%
 echo.
 
 where java >nul 2>&1
@@ -36,15 +49,18 @@ if errorlevel 1 (
     exit /b 1
 )
 
+rem Nunca use BuildTools dentro do diretorio do repositorio ou em OneDrive.
+if not exist "%LOCALBUILD%" mkdir "%LOCALBUILD%"
 if not exist "%BUILDTOOLS%" (
-    echo [1/5] Baixando BuildTools oficial mais recente...
+    echo [1/5] Baixando BuildTools para o armazenamento local...
     curl.exe -fL --retry 3 -o "%BUILDTOOLS%" "https://hub.spigotmc.org/jenkins/job/BuildTools/lastSuccessfulBuild/artifact/target/BuildTools.jar"
     if errorlevel 1 (
         echo [ERRO] Falha ao baixar o BuildTools.
         exit /b 1
     )
 ) else (
-    echo [1/5] BuildTools local encontrado.
+    echo [1/5] BuildTools local encontrado em:
+    echo         %BUILDTOOLS%
 )
 
 echo.
@@ -61,12 +77,16 @@ if not exist "%ROOT%\target\SpigotPlus.jar" (
 )
 
 echo.
-echo [3/5] Gerando Spigot 26.2 com BuildTools...
+echo [3/5] Gerando Spigot 26.2 em armazenamento local...
 if exist "%BUILD%" rmdir /s /q "%BUILD%"
 mkdir "%BUILD%"
 
+pushd "%BUILD%"
 java -jar "%BUILDTOOLS%" --rev 26.2 --output-dir "%BUILD%" --final-name SpigotBase.jar
-if errorlevel 1 (
+set "BUILD_EXIT=!errorlevel!"
+popd
+
+if not "%BUILD_EXIT%"=="0" (
     echo [ERRO] BuildTools falhou ao gerar o Spigot 26.2.
     exit /b 1
 )
@@ -116,5 +136,6 @@ echo Runtime esperado:
 echo   java -jar SpigotPlus.jar nogui
 echo.
 echo Nao e necessario spigot.jar separado.
+echo Nao e usado OneDrive para o BuildTools.
 echo.
 exit /b 0
