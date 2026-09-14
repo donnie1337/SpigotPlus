@@ -13,11 +13,14 @@ import com.donnie1337.spigotplus.core.performance.AllocationMetrics;
 import com.donnie1337.spigotplus.core.performance.TickProfiler;
 import com.donnie1337.spigotplus.core.scheduler.TickEngine;
 import com.donnie1337.spigotplus.core.storage.AsyncIoExecutor;
+import com.donnie1337.spigotplus.core.world.World;
+import com.donnie1337.spigotplus.core.world.WorldManager;
 import com.donnie1337.spigotplus.core.world.chunk.ChunkBudget;
 import com.donnie1337.spigotplus.core.world.chunk.ChunkLoadController;
 import com.donnie1337.spigotplus.core.world.chunk.ChunkManager;
 import com.donnie1337.spigotplus.protocol.ProtocolRegistry;
 
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicReference;
@@ -34,6 +37,7 @@ public final class ServerRuntime {
     private final ServerConfig config;
     private final ChunkLoadController chunkLoadController;
     private final ChunkManager chunkManager;
+    private final WorldManager worldManager;
     private final EntityTracker entityTracker = new EntityTracker(16);
     private final AdaptiveLoadController adaptiveLoad = new AdaptiveLoadController();
     private final TickProfiler profiler = new TickProfiler();
@@ -49,6 +53,7 @@ public final class ServerRuntime {
     public ServerRuntime(String[] arguments) {
         this.arguments = arguments == null ? new String[0] : arguments.clone();
         this.config = ServerConfig.defaults();
+        this.worldManager = new WorldManager(config.serverDirectory().resolve("worlds"));
         this.chunkLoadController = new ChunkLoadController(ChunkBudget.from(config));
         this.chunkManager = new ChunkManager(chunkLoadController);
         this.tickEngine = new TickEngine(this::tick);
@@ -60,6 +65,8 @@ public final class ServerRuntime {
             LOGGER.info("Starting SpigotPlus Server Core");
             if (arguments.length > 0) LOGGER.info("Bootstrap arguments: " + Arrays.toString(arguments));
             LOGGER.info("Chunk budget: " + config.maxActiveChunksPerPlayer() + " active/player, view " + config.viewDistance() + ", simulation " + config.simulationDistance());
+            World world = worldManager.loadOrCreate("world", -64, 320);
+            LOGGER.info("World loaded: " + world.name() + " (seed " + world.seed() + ")");
             networkServer.start();
             bedrockNetworkServer.start();
             tickEngine.start();
@@ -91,6 +98,7 @@ public final class ServerRuntime {
     }
 
     public ServerConfig config() { return config; }
+    public WorldManager worldManager() { return worldManager; }
     public ChunkLoadController chunkLoadController() { return chunkLoadController; }
     public ChunkManager chunkManager() { return chunkManager; }
     public EntityTracker entityTracker() { return entityTracker; }
