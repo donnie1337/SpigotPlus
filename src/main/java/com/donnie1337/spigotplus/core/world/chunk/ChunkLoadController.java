@@ -20,10 +20,10 @@ public final class ChunkLoadController {
     }
 
     public boolean tryAcquireGeneration(int playerGenerating) {
-        if (playerGenerating >= budget.maxGeneratingPerPlayer()) {
+        if (playerGenerating >= budget.maxGeneratingChunksPerPlayer()) {
             return false;
         }
-        return tryAcquire(globalGenerating, budget.globalMaxGenerating());
+        return tryAcquire(globalGenerating, budget.globalMaxGeneratingChunks());
     }
 
     public void releaseGeneration() {
@@ -31,10 +31,10 @@ public final class ChunkLoadController {
     }
 
     public boolean tryAcquireSending(int playerSending) {
-        if (playerSending >= budget.maxSendingPerPlayer()) {
+        if (playerSending >= budget.maxSendingChunksPerPlayer()) {
             return false;
         }
-        return tryAcquire(globalSending, budget.globalMaxSending());
+        return tryAcquire(globalSending, budget.globalMaxSendingChunks());
     }
 
     public void releaseSending() {
