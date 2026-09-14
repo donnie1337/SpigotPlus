@@ -12,8 +12,6 @@ import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Provisions the proven Bukkit-compatible 26.2 runtime used by SpigotPlus.
@@ -36,7 +34,10 @@ public final class ServerDistributionLauncher {
 
     private final Path root;
     private final Path plugins;
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(TIMEOUT).build();
+    private final HttpClient http = HttpClient.newBuilder()
+            .connectTimeout(TIMEOUT)
+            .followRedirects(HttpClient.Redirect.NORMAL)
+            .build();
 
     public ServerDistributionLauncher(Path root) {
         this.root = root.toAbsolutePath().normalize();
