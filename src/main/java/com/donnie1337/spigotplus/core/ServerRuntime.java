@@ -40,7 +40,7 @@ public final class ServerRuntime {
             state.set(ServerState.FAILED);
             LOGGER.log(Level.SEVERE, "Failed to start SpigotPlus Core", throwable);
             termination.countDown();
-            throw throwable;
+            throw new IllegalStateException("Unable to start SpigotPlus Core", throwable);
         }
     }
 

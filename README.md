@@ -17,6 +17,7 @@ Servidor Minecraft compatível com clientes **1.19.x até 26.2.x**, com foco em 
 
 ```text
 SpigotPlus
+├── Bootstrap
 ├── Core
 ├── API
 │   ├── Bukkit
@@ -60,6 +61,28 @@ Internal API
 Core
 ```
 
+## Bootstrap e Core
+
+A implementação inicial possui um entrypoint Maven executável, ciclo de vida explícito e uma thread autoritativa de 20 TPS. O bootstrap cria o `ServerRuntime`, instala o shutdown hook e aguarda a terminação do servidor.
+
+Estados do ciclo de vida:
+
+```text
+NEW → STARTING → RUNNING → STOPPING → STOPPED
+                       └──────────────→ FAILED
+```
+
+O loop de tick não conhece versões de Minecraft. World, Network, Plugin e os adaptadores de protocolo serão conectados ao Core em etapas posteriores.
+
+## Build
+
+Requer **JDK 26** e Maven.
+
+```bash
+mvn -B clean package
+java -jar target/SpigotPlus-1.0.0-SNAPSHOT.jar
+```
+
 ## Status
 
-Projeto em fase inicial de arquitetura. A implementação será construída por etapas, começando pelo núcleo, bootstrap e contratos internos antes da integração completa de mundos e protocolos.
+Projeto em implementação. Bootstrap, Core lifecycle e tick engine já estão estabelecidos; as próximas etapas são configuração persistente, scheduler de tarefas, API interna, pipeline de rede e os primeiros adaptadores de protocolo.
