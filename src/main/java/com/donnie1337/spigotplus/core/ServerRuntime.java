@@ -4,6 +4,7 @@ import com.donnie1337.spigotplus.compatibility.bukkit.BukkitCompatibility;
 import com.donnie1337.spigotplus.compatibility.bukkit.BukkitCompatibilityBridge;
 import com.donnie1337.spigotplus.core.config.ServerConfig;
 import com.donnie1337.spigotplus.core.entity.EntityTracker;
+import com.donnie1337.spigotplus.core.network.BedrockNetworkServer;
 import com.donnie1337.spigotplus.core.network.NetworkBackpressure;
 import com.donnie1337.spigotplus.core.network.NetworkServer;
 import com.donnie1337.spigotplus.core.network.PacketSecurity;
@@ -43,6 +44,7 @@ public final class ServerRuntime {
     private final BukkitCompatibility bukkit = new BukkitCompatibilityBridge();
     private final NetworkBackpressure<Object> networkBackpressure = new NetworkBackpressure<>(1024);
     private final NetworkServer networkServer = new NetworkServer("0.0.0.0", 25565);
+    private final BedrockNetworkServer bedrockNetworkServer = new BedrockNetworkServer(19132, 19133);
 
     public ServerRuntime(String[] arguments) {
         this.arguments = arguments == null ? new String[0] : arguments.clone();
@@ -53,25 +55,23 @@ public final class ServerRuntime {
     }
 
     public void start() {
-        if (!state.compareAndSet(ServerState.NEW, ServerState.STARTING)) {
-            throw new IllegalStateException("Server can only be started from NEW state");
-        }
+        if (!state.compareAndSet(ServerState.NEW, ServerState.STARTING)) throw new IllegalStateException("Server can only be started from NEW state");
         try {
             LOGGER.info("Starting SpigotPlus Server Core");
             if (arguments.length > 0) LOGGER.info("Bootstrap arguments: " + Arrays.toString(arguments));
-            LOGGER.info("Chunk budget: " + config.maxActiveChunksPerPlayer() + " active/player, view "
-                    + config.viewDistance() + ", simulation " + config.simulationDistance());
-
+            LOGGER.info("Chunk budget: " + config.maxActiveChunksPerPlayer() + " active/player, view " + config.viewDistance() + ", simulation " + config.simulationDistance());
             networkServer.start();
+            bedrockNetworkServer.start();
             tickEngine.start();
             state.set(ServerState.RUNNING);
-
             LOGGER.info("SpigotPlus server is listening on 0.0.0.0:25565");
-            LOGGER.info("Server status ping and Minecraft handshake pipeline are active");
+            LOGGER.info("Bedrock IPv4/UDP: 0.0.0.0:19132 | IPv6/UDP: [::]:19133");
+            LOGGER.info("Server status, Minecraft handshake and Bedrock RakNet discovery are active");
         } catch (Throwable throwable) {
             state.set(ServerState.FAILED);
             LOGGER.log(Level.SEVERE, "Failed to start SpigotPlus Server", throwable);
             try { networkServer.close(); } catch (Throwable ignored) { }
+            try { bedrockNetworkServer.close(); } catch (Throwable ignored) { }
             try { ioExecutor.close(); } catch (Throwable ignored) { }
             termination.countDown();
             throw new IllegalStateException("Unable to start SpigotPlus Server", throwable);
@@ -103,6 +103,7 @@ public final class ServerRuntime {
     public BukkitCompatibility bukkit() { return bukkit; }
     public NetworkBackpressure<Object> networkBackpressure() { return networkBackpressure; }
     public NetworkServer networkServer() { return networkServer; }
+    public BedrockNetworkServer bedrockNetworkServer() { return bedrockNetworkServer; }
 
     public void stop() {
         ServerState current = state.get();
@@ -112,6 +113,7 @@ public final class ServerRuntime {
             LOGGER.info("Stopping SpigotPlus Server");
             tickEngine.stop();
             networkServer.close();
+            bedrockNetworkServer.close();
             ioExecutor.close();
             state.set(ServerState.STOPPED);
             LOGGER.info("SpigotPlus Server stopped cleanly");
