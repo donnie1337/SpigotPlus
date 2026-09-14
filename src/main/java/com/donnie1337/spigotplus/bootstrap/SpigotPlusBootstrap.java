@@ -2,6 +2,7 @@ package com.donnie1337.spigotplus.bootstrap;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.nio.file.Path;
 
 /**
  * Single-JAR entry point. The release build embeds the Spigot server classes
@@ -12,6 +13,10 @@ public final class SpigotPlusBootstrap {
     }
 
     public static void main(String[] args) throws Exception {
+        boolean launch = new ServerDistributionLauncher(Path.of("."))
+                .prepare(args);
+        if (!launch) return;
+
         // Spigot exposes this development-oriented property to bypass its
         // intentionally annoying outdated-build startup delay. SpigotPlus
         // owns the release build, so the check is not useful to the runtime.
